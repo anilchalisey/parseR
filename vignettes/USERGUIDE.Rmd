@@ -1,0 +1,398 @@
+---
+title: "parseR: Pipeline for analysis of RNA-seq in R"
+author: 
+- name: "Anil Chalisey"
+  affiliation: &id "University of Oxford"
+- name: "Chris O'Callaghan"
+  affiliation: *id
+output: 
+  BiocStyle::html_document2
+vignette: >
+  %\VignetteIndexEntry{parseR: Pipeline for analysis of RNA-seq in R}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, echo = FALSE}
+library("knitr")
+```
+# Introduction
+
+This document illustrates the use of the `r Githubpkg("anilchalisey/parseR")` package for analysis of RNA-seq data.  The `r Githubpkg("anilchalisey/parseR")` package provides tools for quality control of raw reads, read alignment, expression estimation,differential gene expression identification, and biological pathway and transcription motif factor enrichment analysis.  It uses a number of tools, as detailed below, but does not intend to replace them.  Instead, it aims to provide an environment and pipeline that facilitates analysis of RNA-seq data in a straightforward and reproducible manner.  
+
+To our knowledge, this is the first package of this type that runs on both Linux/Unix-based systems and Windows 10.  To run on the latter operating system, the package leverages the Windows-subsystem for linux (WSL) tool released in the Windows 10 Creator's Edition.  In addition, this is one of the very few tools that runs a complete pipeline from read QC to motif enrichment analysis in a desktop or local server environment without the need to upload data to a web-based server.
+
+# Installing and loading
+
+## Prerequisites
+
+In addition to the `r Githubpkg("anilchalisey/parseR")` package itself, the workflow requires installation of several other command line tools and R packages.  The command line tools required for the package are shown in Table \@ref(tab:clt), and the R packages in Table \@ref(tab:rpack).
+
+```{r clt, echo = FALSE, eval = TRUE}
+tools <- c("samtools", "sambamba", "hisat2", "fastqc", "R")
+min_version <- c("1.4.1", "0.6.6", "2.0.5", "0.11.5", "3.3.0")
+Binaries <- data.frame(tools, min_version)
+Binaries <- Binaries[order(tools), ]
+knitr::kable(as.data.frame(Binaries), row.names = FALSE, 
+             caption = "Required command line tools for parseR")
+```
+
+```{r rpack, echo = FALSE, eval = TRUE}
+package <- c("ggthemes", "data.table", "knitr", "rmarkdown", "statmod",
+             "goseq", "tidyverse", "ComplexHeatmap", 
+             "SummarizedExperiment", "Rsamtools", "GenomicAlignments",
+             "rtracklayer", "limma", "DESeq2", "edgeR")
+version <- c("3.4.0", "1.10.4", "1.15.1", "1.5", "1.4.29", "1.28.0", 
+             "1.1.1", "1.14.0", "1.6.3", "1.28.0", "1.12.1", "1.36.3", 
+             "3.32.2", "1.16.1", "3.18.1")
+repository <- c(rep("CRAN", 5), "BioConductor", "CRAN",
+                rep("BioConductor", 8))
+rpack <- data.frame(package, version, repository)
+rpack <- rpack[order(repository, package), ]
+knitr::kable(as.data.frame(rpack), row.names = FALSE, 
+             caption = "Required R packages")
+```
+
+A detailed guide to installation of these programs and packages may be found in the accompanying vignette `Setting Up WSL`, which contains instructions for both Linux and Windows 10.
+
+## Installing parseR
+
+Once all the prerequisites are installed, the package, which is available from github, may be installed and loaded using the commands below.  If using Windows, [Rtools](https://cran.r-project.org/bin/windows/Rtools/) must be installed first, as it is a pre-requisite for `r CRANpkg("devtools")`.
+
+```{r, echo = TRUE, eval = FALSE}
+if(!require(devtools)) install.packages("devtools")
+devtools::install_github("anilchalisey/parseR")
+library("parseR")
+```
+
+# Quality Control of Raw Reads
+
+The quality control module of the package has been designed to run, parse and summarise the output of the widely-used sequence quality assessment tool [FASTQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/).  It also generates single-sample and multi-sample reports using the QC data.  
+
+To start the analysis, ensure that [FASTQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) is in the executable path of the system you are using.  The input parameter should be a list of fastq/fasta files which may be gunzipped.  The [FASTQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) tool is then simply run using the command `run_fastqc()`.  The results of the FASTQC analysis are saved to a user-specified directory
+
+```{r, echo = TRUE, eval = FALSE}
+# list all files in the given directory ending in ".fastq"
+fq <- list.files(path = "./sequencing_files", pattern = "*.fastq$", full.names = TRUE)
+# run the fastqc tools
+run_fastqc(fq.files = fq, out.dir = "results", threads = 4)
+```
+
+### Parsing the result from a single FASTQC report
+
+If only a single FASTQC report is to be parsed, then the first step is to read in the report.  This is achieved using the `read_fastqc()` function.
+At this stage, the user may only wish to look at diagnostic plots rather than generating a full report.  If this is the case, the `plot_fqc()` function is used, specifying which diagnostic plots are desired.  Alternatively, if a complete report is desired, the `create_fqreport` is used.
+
+```{r, echo = TRUE, eval = FALSE}
+result <- read_fastqc("./results/sample1_fastqc.zip")
+
+# Plots - see the manual for full details
+plot_fqc(result, modules = "all")
+plot_fqc(result, modules = c("gc content", "sequence quality"))
+
+# HTML report
+create_fqreport(fqc = result, outdir = "results", 
+                experiment = "Sequencing data", 
+                author = "John Doe", 
+                preview = TRUE)
+```
+
+An example of a a single-sample QC report may be found [here](http://htmlpreview.github.io/?https://github.com/anilchalisey/fqcr/blob/master/docs/singleQCreport.html).
+
+### Parsing the result from a directory of multiple FASTQC reports
+
+Alternatively, there may be multiple FASTQC reports which need to be analysed.  In this case, the reports should all be in the same directory, the path of which is used as the argument to the `read_multifastqc()` function, which outputs a list, where each item contains the parsed data from an individual FASTQC report.  Then, as before, to examine diagnostic plots the `plot_fqc()` function is used, either on a single item, or across several/all items in the list by vectorising the `plot_fqc()` function using `lapply()`.
+
+Sometimes, rather than examining each report individually, it is useful to generate a summary of the data.  
+
+* the `module_fqc()` function produces a list of three items.
+    * The first list item is a dataframe, in which each row is a sample and the columns are the FASTQC modules. Each cell indicates the outcome (pass, warn or fail) for that module by each sample.
+    * The second item summarises the module results per module, indicating for each module, how many samples passed, warned or failed. In addition, individual summaries for warned and failed are provided.
+    * The third item summrises the module results per sample, indicating for each sample, how many modules passed, warned or failed. In addition, individual summaries for warned and failed are provided.
+* the `stats_summary()` function returns a data frame object containing basic metrics from the FASTQC reports.
+
+Finally, a complete HTML report, summarising all the data for each library may be created using the `create_fq()` function as before.
+
+```{r, echo = TRUE, eval = FALSE}
+result <- read_multifastqc("./results")
+
+# Plots - see the manual for full details
+# the result is a list, and each item in the list may be accessed individually
+plot_fqc(result[[1]], modules = "all")
+lapply(result, function(x) plot_fqc(x, modules = "gc content"))
+
+# summaries - these are dataframes which may be manipulated using R
+# The summaries will indicate which modules were passed, warned or failed
+module_summary <- module_fqc(result)
+stats_summary <- stats_fqc(result)
+
+# HTML report
+fqc <- "results"
+create_fqreport(fqc = fqc, outdir = "results", 
+                experiment = "Sequencing data", 
+                author = "John Doe", 
+                preview = TRUE)
+```
+
+An example of a multi-sample QC report may be found [here](http://htmlpreview.github.io/?https://github.com/anilchalisey/fqcr/blob/master/docs/multiQCreport.html).
+
+# Aligning reads
+
+The alignment module of the package leverages [HISAT2](https://ccb.jhu.edu/software/hisat2/index.shtml), [SAMTools](http://www.htslib.org/) and [Sambamba](http://lomereiter.github.io/sambamba/) to generate alignment files in BAM format and coverage files in BigWig format.  If the mapping is performed with default settings (which is recommended and suitable for most analyses), the resultant alignment files are filtered to remove mitochondrial and improperly aligned reads.  Alignment statistics are provided in tabular and graphical format.  Most options may be left at default settings, but some of the key options are:
+
+* threads - * threads - the number of parallel threads to be used.  If parallel processing is to be used, the number of cores may be easily determined using the `r CRANpkg("parallel")` package (if available): `parallel::detectCores()`.
+* plot - whether to generate diagnostic plots of alignment statistics.  If set as TRUE, be aware that if there are many and/or large BAM files, this may take some time.
+* bigwig - whether to generate bigwig files for uploading into a genome browser.  If set as TRUE, be aware that this may take some time.
+* hisat2, samtools, sambamba options - the path to the respective programs.  In Linux, provided this is in the $PATH, this does not need to be changed.  Similarly, in Windows 10, if the installation instructions in the setting up WSL guide were followed, this does not need to be changed.  However, if it is in a non-standard location, even if it is in $PATH, it is not possible to easily call the program from R without specifying the full path to the binary.
+* idx - path and basename of the hisat2 index files.  The basename is the name of the index files up to but not including the final .1.ht2, etc.  Index files may be created using hisat2 itself (see the (hisat2 manual)[https://ccb.jhu.edu/software/hisat2/manual.shtml]), or for common genomes, downloaded from the (hisat2 website)[ftp://ftp.ccb.jhu.edu/pub/infphilo/hisat2/data].
+
+```{r, echo = TRUE, eval = FALSE}
+# See manual for further details and options
+align_rna(threads = 2, plot = TRUE, out.dir = ".", bigwig = TRUE,
+          hisat2 = "hisat2", samtools = "samtools", sambamba = "sambamba",
+          idx = "../prana/data-raw/index/UCSC.hg19",
+          reads.dir = "../prana/data-raw/seqFiles", fastq = TRUE)
+```
+
+# Expression quantification and differential gene expression analysis
+
+This step is performed by the `run_diff()` function.  There are two starting points here - one may begin either with BAM files, in which case the function will take care of read counting, or one may begin with a matrix of counts generated externally.  There is an extensive list of option, but most may be left at their default settings.  Here we discuss the main options that need adjusting:
+
+* threads - the number of parallel threads to be used.  If parallel processing is to be used, the number of cores may be easily determined using the `r CRANpkg("parallel")` package (if available): `parallel::detectCores()`.
+* experimentTitle - a name for the experiment.  Currently, this does not do much, but in a later revision of the program, reports will be generated using this information.
+* modules - the programs to use for differential analysis.  This may be any combination of "L" (limma), "E" (edgeR), and "D" (DESEq2).  If more than one program is chosen, additional output files are produced indicating the genes which were identified as differential by all the programs.
+* p.value - the adjusted p-value for significance testing; the default is 0.05.
+* sample.path - the path to a sample metadata file.  This is a tab-delimited text file containing information about the samples being analysed in tabular format.  An example of such a file is shown in Table \@ref(tab:samp).  The important columns in this file are:
+
+    * **basename**: the basename of the samples.  For example, if a BAM file for counting is located at `/bamfiles/WT_HEK_sample1.bam`, then the basename is `WT_HEK_sample1`, i.e., the filename without the path and extension.  If starting from an externally generated count matrix, then the basename is the column name used to describe that sample.
+    * **a contrast column**: the name of this column is up to the user's discretion, but this column contains information about the contrasts of interest.  Thus, if the analysis was comparing wild-type cells with cells that had gene 1 or gene 2 knocked out, then the entries in this column might be `WT`, `KO1`, and `KO2`.
+    * **a column indicating blocking factors or batch effect**: the name of this column is up to the user's discretion, but this column contains information about blocking factors or batch effect. This, if the analysis had three replicates for each condition, this might contain that information in the form of the entries `1`, `2`, and `3`.  Alternatively, the experiment may contain multiple cell types, but the desire is to compare one condition against other condition, but still take into account that there might be differences between cell types - in this situation, this column would be used to indicate cell type.  
+    
+```{r samp, echo = FALSE, eval = TRUE}
+basename <- c("HAEC_OX_SAMPLE1", "HAEC_OX_SAMPLE2", "HAEC_OX_SAMPLE3", 
+              "HAEC_UNT_SAMPLE1", "HAEC_UNT_SAMPLE2", "HAEC_UNT_SAMPLE3",
+              "VSMC_UNT_SAMPLE1", "VSMC_UNT_SAMPLE2", "VSMC_UNT_SAMPLE3",
+              "VSMC_OX_SAMPLE1", "VSMC_OX_SAMPLE2", "VSMC_OX_SAMPLE3")
+condition <- rep(c("OX", "UNT"), times = 2, each = 3)
+replicate <- rep(c(1, 2, 3), times = 4)
+celltype <- rep(c("HAEC", "VSMC"), times = 1, each = 6)
+condition.celltype <- paste(condition, celltype, sep = ".")
+metdat <- data.frame(basename, condition, replicate, celltype, condition.celltype)
+knitr::kable(metdat, caption = "An example of a sample metadata table.")
+```
+
+* contrast.column - the column in the sample metadata table indicating the contrasts.  In the example above, this would be the column called `condition`.
+* block.column - the column in the sample metadata table indicating blocking factors.  In the example above, this would be the column called `replicate`.  If there are no blocking factors, then this should be NULL.
+* contrast.levels - a character vector specifying the order in which the contrasts should be evaluated.  In the example above, the untreated (UNT) cells are the reference and the OX-treated cells are the condition of interest.  This would be indicated by `c("UNT", "OX")`.  In the earlier example where there were wild-type cells, and two different gene knock-outs, the wild-type cells are the reference, against which both are compared.  In addition, we wish to compare how the two knock-outs differ, using the first gene knock-out as a reference.  This would be indicated by `c("WT", "KO1", "KO2")`.
+* count - this is simply TRUE or FALSE and indicates whether read-counting should be performed.  If TRUE, then the path to the BAM files must be indicated in the `bamfiles` option.  If FALSE, then the path to the count matrix generated from elsewhere must be indicated in the `count.file` option.
+* count.file - only required if `count = FALSE`.  This is simply a tab-delimited text file containing a matrix of counts, where each row is a gene, and each column is a sample library.  Importantly, **the column names must match the basename in the sample metadata file**.
+* featurecounts - the path to featureCounts.  In Linux, provided this is in the $PATH, this does not need to be changed.  Similarly, in Windows 10, if the installation instructions in the setting up WSL guide were followed, this does not need to be changed.  However, if it is in a non-standard location, even if it is in $PATH, it is not possible to easily call the program from R without specifying the full path to the binary.
+* bamfiles - a vactor containing the full paths to the BAM fiels to be counted.  Only used if `count = TRUE`.
+
+A more detailed description of the other options may be found in the help guide for the `run_diff()` function, but for most users these need not be changed.  However, it is worth remembering that if counting is performed, then the default setting is for paired end reads and that the default genome is hg19.  If another genome is required, then it is expected that the user will provide their own annotation for read counting and adjust those options appropriately.  It is also useful to note that it is possible to just perform counting without differential analysis using the function `count_reads()`.
+
+The output of the `run_diff()` function is a directory entitled `DE_results` which contains subdirectories for the results from each program used, plus an additional subdirectory for "common results".
+
+# Functional analysis of differential gene expression results
+
+## Gene ontology analysis
+This is performed using the `run_goseq()` function and leverages the `r Biocpkg("goseq")` package available from Bioconductor.  The two main arguments needed are the 'universe' of genes examined (i.e. all the genes in the genome) and the genes identified as differential.  The universe of genes may be easily lifted from the count matrix and the differentially expressed genes from the output of `run_diff()`.
+
+```{r, echo = TRUE, eval = FALSE}
+universe <- read.table("DE_results/Common_results/counts.txt", header = TRUE)
+universe <- unlist(universe$genes)
+degs <- read.table("DE_results/Common_results/common_degs.txt", header = TRUE)
+degs <- unlist(degs$genes)
+
+goseq_results <- run_goseq(universe, degs, test.cats = c("GO:BP", "GO:MF"), out = "goseq")
+```
+
+## Pathway analysis
+This is performed using the `run_goseqmsigdb()` function, and again uses the `r Biocpkg("goseq")` package as well as the Broad Institute's curated Molecular Signature Database, which is provided within this package in an R-readable format.  As this database relies on EntrezID terms, the function provides an in-built conversion tool from HGNC to EntrezID, if required.
+
+```{r, echo = TRUE, eval = FALSE}
+universe <- read.table("DE_results/Common_results/counts.txt", header = TRUE, stringsAsFactors = FALSE)
+universe <- universe$genes
+degs <- read.table("DE_results/Common_results/common_degs.txt", header = TRUE, stringsAsFactors = FALSE)
+degs <- degs$genes
+
+goseq_results <- run_goseqmsigdb(universe, degs, symbol = "HGNC", out = "goseq")
+```
+
+## Motif enrichment analysis
+This is performed using the PERL-based program HOMER via a wrapper script `run_homer()` which runs the program and then parses its output into a more readable format accessible through R.  If the motif analysis has already been done, and we simply wish to parse the output, then this is also possible using the functions `parse_known()` which works on the 'known motifs` identified by HOMER, and `parse_denovo()` which works on the 'denovo motifs'.  The wrapper script provides options to manipulate almost all of HOMER's arguments, but most of these can be left as default.
+
+```{r, echo = TRUE, eval = FALSE}
+degs <- read.table("DE_results/Common_results/common_degs.txt", header = TRUE)
+degs <- unlist(degs$genes)
+
+motif_results <- run_homer(genelist = degs, genome = "human", output.dir = "motifs")
+```
+
+# Worked example
+
+The data for this example comes from an experiment looking at gene expression in primary human aortic endothelial cells, comparing those treated with the atherogenic lipid oxLDL, or with the oxLDL buffer alone, or with no treatment whatsoever.  Analysing the whole dataset would be time-consuming and difficult to do on a desktop computer, so here we provide a subset of 1 million reads from each fastq file (sampled with the same seed).  The files may be downloaded from [here](https://1drv.ms/f/s!Av-1IO6XB27Sh_gC75Lynac0IbzLGw).  To follow the working, download the files and then save them into a directory called `seqfiles`.  There should be 12 files in fastq format which have been gunzipped (i.e.,and so end in `fastq.gz`)  The hisat2 index files necessary for the analysis may be found [here](https://1drv.ms/f/s!Av-1IO6XB27Sh_4dadMxyU-sACswnA) and should be downloaded and saved to a directory called `index`.
+
+## QC of raw reads
+We begin first by performing QC on the raw reads using the `run_fastqc()` function.  
+
+```{r, echo = TRUE, eval = FALSE}
+fq.files <- list.files(path = "seqfiles/", pattern = "*.fastq", full.names = TRUE)
+run_fastqc(fq.files = fq.files, out.dir = "fastqc_results", 
+           threads = 4, fastqc = "fastqc")
+```
+
+We should now have a directory called `fastqc_results` which contains the reports generated by the FASTQC program.  As we have multiple fastqc reports, we read these files into R using the `read_multifastqc()` function.  If we examine the result, we should find it is a list of 12 objects (one for each of the `fastq.gz` files), and that each object contains 14 items, which are the results of the modules that are tested by the FASTQC program.
+
+```{r, echo = TRUE, eval = FALSE}
+fqc_results <- read_multifastqc(fqc.dir = "fastqc_results")
+str(fqc_results)
+```
+
+Having read in the results, the next step is to generate some diagnostic plots.  This is achieved using the `plot_fqc()` function.  To look at an individual library, we simply subset that library as an argument to `plot_fqc()` as shown below, where we look at library number 3. In this example, we want to look at all the modules so we select modules = "all". To save the output to file, in Rstudio select the 'Export' button on the plot window, and in native R use the `png()` or `pdf()` functions.
+
+```{r, echo = TRUE, eval = FALSE}
+plot_fqc(fqcRes = fqc_results[[3]], modules = "all")
+```
+
+Next, to generate a tabulated summary of the results we can use the `module_summary()` and `stats_summary()` functions.  However, if we are just going to generate a report, then these are included in the output.  We have two choices here, we can generate a report for a single read library, or a report aggregating the results for all 12 libraries.  Both options are shown here.
+
+```{r, echo = TRUE, eval = FALSE}
+# generating a report on a single library
+create_fqreport(fqc = "fastqc_results/HB1_sample_1_fastqc.zip", 
+                outdir = "fastqc_results", 
+                experiment = "RNA-seq of oxLDL tretaed HAECs", 
+                author = "Anil Chalisey", preview = TRUE)
+
+# generating a report for all libraries within a directory
+create_fqreport(fqc = "fastqc_results", 
+                outdir = "fastqc_results", 
+                experiment = "RNA-seq of oxLDL tretaed HAECs", 
+                author = "Anil Chalisey", preview = TRUE)
+
+```
+
+At this point it is important to look at the QC results and decide whether any trimming, clipping, or filtering of the reads is required before proceeding to read alignment. The reports provide guidance for this, and if it is required, multiple tools are available, although not included within this package.
+
+## Read alignment
+This is very straightforward (albeit time-consuming) and performed using the `align_rna()` function.  For most users, the default options are suitable, and should not be changed.  Left with default settings, the program will output BAM files containing all reads, and filtered BAM files from which mitochondrial and improperly mapped or unmapped reads are removed using samtools.  In addition, duplicate reads are marked (but not removed) using Sambamba.  If `bigwig = TRUE`, then coverage files in bigwig format are also produced.  In this example, to save time, this option is set as false.  The output directory contains 2 (or 3 if `bigwig = TRUE`) subdirectories; the `bam` directory contains the unfiltered reads and the `filteredbam` contains the filtered reads.
+
+```{r, echo = TRUE, eval = FALSE}
+align_rna(threads = 4, out.dir = "bamfiles", bigwig = FALSE, 
+          hisat2 = "hisat2", samtools = "samtools", 
+          sambamba = "sambamba", idx = "index/UCSC.hg19", 
+          reads.dir = "seqfiles/")
+```
+
+## Read counting and differential gene expression analysis
+Again, this is straightforward.  The read counting is performed using the featureCounts function within the Subread program, and, in this example, the differential analysis performed using all three programs - `r Biocpkg("limma")`, `r Biocpkg("edgeR")`, and `r Biocpkg("DESeq2")`.  Before starting we first need to create a sample metadata file.  This may be done externally or from within R, as shown here.  We use the alignment files generated above - we can use either the unfiltered or filtered files, as the default counting settings automatically exclude improperly mapped or unmapped reads or those mapping to multiple locations.  If there are very many BAM files, it is sometimes preferable to use the filtered files to reduce processing time, but as `align_rna()` appends "filtered" to the basename of the file, users may simply prefer to use the unfiltered files for ease of typing and aesthetic purposes.
+
+```{r sample, echo = TRUE, eval = TRUE}
+md <- data.frame(
+  basename = c("HB1_sample", "HB2_sample", "HU1_sample", "HU2_sample",
+               "HO1_sample", "HO2_sample"),
+  condition = c(rep("BUFF", 2), rep("UNT", 2), rep("OX", 2)),
+  replicate = rep(c(1, 2), each = 1, times = 3))
+write.table(md, file = "target.txt", col.names = TRUE, 
+            row.names = TRUE, quote = FALSE, sep = "\t")
+knitr::kable(md)
+```
+
+Once the sample metadata file is ready, the rest of the analysis proceeds with a call to the `run_diff()` function.
+
+```{r rundiff, echo = FALSE, eval = FALSE}
+bamfiles <- list.files(path = "bamfiles/bam", 
+                       pattern = "bam$", full.names = TRUE)
+results <- run_diff(threads = 4, 
+                    experimentTitle = "RNA-seq of oxLDL treated HAECs",
+                    modules = "LED", p.value = 0.05, 
+                    sample.path = "target.txt", 
+                    contrast.column = "condition", 
+                    block.column = "replicate", 
+                    contrast.levels = c("UNT", "BUFF", "OX"), 
+                    count = TRUE, 
+                    featurecounts = "featureCounts",
+                    bamfiles = bamfiles)
+```
+
+The result of the `run_diff()` function call is a counts file of gene expression, various plots showing count distribution, sample distance (in the form of MDS or PCA plots), the effects of the count normalisation applied during differential analysis, and the results of the actual differential analysis itself, both in tabulated and graphical forms.  These are all contained within the directory `DE_analysis`.  Within the subdirectories, you will notice some files with the prefix "BUFF-UNT", "OX-UNT", "OX-BUFF".  These are the individual results for the three specific comparisons.  In addition, within the `Common_results` directory, there are also venn diagrams showing how many genes were identified as differentially expressed using each of the three programs, and also a tab-delimited file with the P-values, fold-change and raw counts for these genes (the `*_common.txt` files).
+
+## Pathway analysis
+
+Pathway analysis of the results is performed using the `run_goseq()` and `run_goseqmsigdb()` functions.  We first need to specify the universe of genes considered, and then specify the differential genes within that universe.  In this example, we will consider those genes identified as differential by all three programs in the "OX-UNT" comparison.  The universe of genes is all the genes that remained after the initial filtering to remove lowly expressed genes.  This can be obtained from any of the differential expression results, as the tables contain the genes in order of p-value, and includes those that were avove the p-value of significance.  
+
+In this example, for gene ontology analysis we are only interested in GO terms from the Biological Processes (BO) and Molecular Functions (MF) categories.  We exclude those terms which contain more than 500 genes as being too broad, and set our adjusted p-value for significant enrichment as 0.05.
+
+```{r, echo = TRUE, eval = FALSE}
+universe <- read.delim(
+  "DE_results/edger_results/DEgenes_edger_OX-UNT.txt",
+  stringsAsFactors = FALSE)
+universe <- universe$genes
+degs <- read.delim("DE_results/Common_results/OX-UNT_common.txt",
+                       stringsAsFactors = FALSE)
+degs <- degs$genes
+
+goseq_results <- run_goseq(universe = universe, degs = degs,
+                           test.cats = c("GO:BP", "GO:MF"),
+                           numInCat = 500, qv = 0.05, out = "goseq")
+```
+
+For the MSIGdb enrichment analysis, we set the same cutoffs for exclusion.  In addition, we specify that our genes have "HGNC" IDs.  Finally, we do some additional manipulation of the resultant data-frame to get those pathways found in either KEGG, BIOCARTA or REACTOME only.
+
+```{r, echo = TRUE, eval = FALSE}
+msigdb_results <- run_goseqmsigdb(
+  universe = universe, degs = degs, symbol = "HGNC",
+  numInCat = 500, qv = 0.05, out = "goseq")
+msigdb_results <- 
+  msigdb_results[grep("KEGG|BIOCARTA|REACTOME", msigdb_results$Term), ]
+```
+
+The final results are written out to the directory specified, i.e. `goseq`.
+
+## Motif enrichment analysis
+
+Motif enrichment analysis is performed using HOMER.  Again, the default settings are suited for most situations, and we do not adjust them here.  This analysis may take some time. If motif enrichment analysis has been performed externally using HOMER, it is also possible to directly parse the motif directories using the `parse_known()` and `parse_denovo()` functions.
+
+```{r, echo = TRUE, eval = FALSE}
+motif_results <- run_homer(genelist = degs, genome = "human",
+                           output_dir = "motifs", p = 4)
+
+```
+
+# Bibliography
+
+[1] Anders, Simon, and Wolfgang Huber. "Differential expression analysis for sequence count data." Genome biology 11, no. 10 (2010): R106.
+
+[2] Love, Michael I., Wolfgang Huber, and Simon Anders. "Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2." Genome biology 15, no. 12 (2014): 550.
+
+[3] Robinson, Mark D., Davis J. McCarthy, and Gordon K. Smyth. "edgeR: a Bioconductor package for differential expression analysis of digital gene expression data." Bioinformatics 26, no. 1 (2010): 139-140.
+
+[4] Liao, Yang, Gordon K. Smyth, and Wei Shi. "featureCounts: an efficient general purpose program for assigning sequence reads to genomic features." Bioinformatics 30, no. 7 (2013): 923-930.
+
+[6] Ritchie, Matthew E., Belinda Phipson, Di Wu, Yifang Hu, Charity W. Law, Wei Shi, and Gordon K. Smyth. "limma powers differential expression analyses for RNA-sequencing and microarray studies." Nucleic acids research (2015): gkv007.
+
+[7] Li, Heng, Bob Handsaker, Alec Wysoker, Tim Fennell, Jue Ruan, Nils Homer, Gabor Marth, Goncalo Abecasis, and Richard Durbin. "The sequence alignment/map format and SAMtools." Bioinformatics 25, no. 16 (2009): 2078-2079.
+
+[8] Kim, Daehwan, Ben Langmead, and Steven L. Salzberg. "HISAT: a fast spliced aligner with low memory requirements." Nature methods 12, no. 4 (2015): 357-360.
+
+[9] Tarasov, Artem, Albert J. Vilella, Edwin Cuppen, Isaac J. Nijman, and Pjotr Prins. "Sambamba: fast processing of NGS alignment formats." Bioinformatics 31, no. 12 (2015): 2032-2034.
+
+[10] Andrews, Simon. "FastQC: a quality control tool for high throughput sequence data." (2010): 175-176.
+
+[11] Young, Matthew D., Matthew J. Wakefield, Gordon K. Smyth, and Alicia Oshlack. "goseq: Gene Ontology testing for RNA-seq datasets." R Bioconductor (2012).
+
+[12] Heinz, Sven, Christopher Benner, Nathanael Spann, Eric Bertolino, Yin C. Lin, Peter Laslo, Jason X. Cheng, Cornelis Murre, Harinder Singh, and Christopher K. Glass. "Simple combinations of lineage-determining transcription factors prime cis-regulatory elements required for macrophage and B cell identities." Molecular cell 38, no. 4 (2010): 576-589.
+
+# Setup
+
+This analysis was conducted on:
+
+```{r settings_used, results = "asis", echo = FALSE}
+si <- as.character(toLatex(sessionInfo()))
+si <- si[-c(1, length(si))]
+si <- gsub("(\\\\verb)|(\\|)", "", si)
+si <- gsub("~", " ", si)
+si <- paste(si, collapse = " ")
+si <- unlist(strsplit(si, "\\\\item"))
+cat(paste(si, collapse = "\n -"), "\n")
+```

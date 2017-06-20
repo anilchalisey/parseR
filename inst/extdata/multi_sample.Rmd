@@ -1,0 +1,267 @@
+---
+title: "Multiple QC Reports"
+subtitle: "Quality control of reads"
+output: 
+  html_document:
+    theme: flatly
+    highlight: haddock
+    self_contained: true
+    smart: true
+    toc: true
+    toc_float: 
+      collapsed: false
+    toc_depth: 2
+    smooth_scroll: true
+    number_section: false
+    df_print: paged
+---
+   
+   
+```{r, echo = FALSE}
+## Load the necessary packages.
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(data.table))
+
+## Global options.
+opts_chunk$set(echo = FALSE,
+               cache = FALSE,
+               prompt = FALSE,
+               tidy = TRUE,
+               comment = NA,
+               message = FALSE,
+               warning = FALSE)
+```
+     
+```{r, echo = FALSE}
+if (is.null(experiment)) experiment <- "Sequencing data"
+if (is.null(author)) author <- Sys.info()['user']
+```
+    
+- **Date:** `r Sys.Date()`
+- **Author:** `r author`
+- **Experiment description:** `r experiment`
+
+```{r}
+qc <- read_multifastqc(unique(dirname(qc.files)))
+ag <- aggregate_fqc(qc)
+```
+   
+# Introduction
+
+This document aggregates the quality control metrics for the `r length(qc.files)` FASTQC files into a single report.  Quality control of the raw reads was performed using `FASTQC` and this report has been generated using the `fqcr` package.
+
+# Basic Statistics
+     
+**Basic statistics** shows basic data metrics including the total number of sequences, the number of sequences flagged as poor quality, the mean sequence lengths, the overall percentage GC content, and the percentage of duplicated reads.
+   
+```{r}
+tb <- ag[[1]]
+colnames(tb) <- c("sample", "total seq", "poor qual seq", "mean seq length",
+               "GC %", "Dupl %")
+as.data.frame(tb)
+```
+
+# Summary 
+
+**Summary** shows for each sample, the FASTQC modules tested and which were passed, gave rise to warnings or were failed.  It is important to stress that although the analysis results give a pass/fail result, these evaluations must be taken in the context of what is expected from the library. Some experiments may be expected to produce libraries which are biased in particular ways.  The summary evaluations should therefore be considered as pointers as to where attention should be concentrated rather than absolute indicators of quality.
+
+```{r}
+md <- module_fqc(qc)
+as.data.frame(md$all)
+```
+
+The tables below provide the same information as above, but in more compact formats.    
+The first table shows, for each FastQC module, the number of samples that passed, failed or warned.
+
+```{r}
+as.data.frame(md$by_module$summary)
+```
+
+The next table shows for each sample, the number of modules that were passed, failed or warned.
+
+```{r}
+as.data.frame(md$by_sample$summary)
+```
+
+# Per base sequence quality {.tabset .tabset-fade}
+     
+The **Per base sequence quality** plot gives an overview of the range of quality scores across all bases at each position in the FastQ file using box-and-whisker plots.  The per-base sequence quality is determined by the Phred score.  The Phred score ($Q$) is defined as $Q = -10 \times log_{10}P$, where $P$ is the base-calling error probability.  Therefore, if a base has a quality score of 10, this means there is a 1 in 10 chance it is wrong, and if it has a Phred score of 30, it has a 1 in 1000 chance of being wrong.  Thus, the higher the Phred score, the more reliable the base call.  The background of the graph divides the y axis into very good quality calls (green), calls of reasonable quality (orange), and calls of poor quality (red). The quality of calls on most platforms will degrade as the run progresses, so it is common to see base calls falling into the orange area towards the end of a read.
+
+Problems:
+   
+- **warning** if the median for any base is less than 25. 
+- **failure** if the median for any base is less than 20. 
+
+Common reasons for problems:
+
+- Degradation of (sequencing chemestry) quality over the duration of long runs. Remedy: Quality trimming.
+  
+- Short loss of quality earlier in the run, which then recovers to produce later good quality sequence. Can be explained by a transient problem with the run (bubbles in the flowcell for example). In these cases trimming is not advisable as it will remove later good sequence, but you might want to consider masking bases during subsequent mapping or assembly. 
+   
+- Library with reads of varying length. Warning or error is generated because of very low coverage for a given base range. Before committing to any action, check how many sequences were responsible for triggering an error by looking at the sequence length distribution module results. 
+
+
+```{r per_base_sequence_quality, results = "asis", out.width = "100%"}
+
+for (i in 1:length(qc)) {
+  cat("\n##", gsub("_fastqc.zip", "", basename(qc.files[i])), "\n")
+  
+  p <- .plot_bq(qc[[i]])
+  print(p)
+  
+  cat("\n")
+}
+```
+  
+
+# Per sequence quality scores
+    
+The **Per sequence quality scores** plot shows the frequencies of quality scores in each sample and identifies whether a specific sample has universally low quality values. It is not unusual for some sequences to be poorly imaged (for example, if they are on the edge of the field of view), but  these should represent only a small percentage of the total sequences.  If a significant proportion of the sequences in a run have an overall low quality then this could indicate a systematic problem that needs addressing.
+
+Problems:
+   
+- **warning** if the most frequently observed mean quality is below 27 - this equates to a 0.2% error rate. 
+- **failure** if the most frequently observed mean quality is below 20 - this equates to a 1% error rate.
+
+Common reasons for problems:
+
+- General loss of quality within a run. Remedy: For long runs this may be alleviated through quality trimming.
+
+
+```{r}
+names(qc) <- gsub("_fastqc.zip", "", names(qc))
+d <- lapply(qc, function(x) x$per_sequence_quality_scores)
+d <- lapply(d, function(x) y <- rle(rep(x$Quality, x$Count)))
+d <- lapply(d, function(x) {
+  x$lengths <- round(x$lengths/100)
+  x <- unclass(x)
+  data.frame(x)
+})
+names(d) <- paste0(names(d), "     ")
+
+count <- lapply(d, function(x) {
+  cnt <- data.table::as.data.table(rep(x$values, x$lengths), ncol = 1, byrow = TRUE)
+})
+count <- data.table::rbindlist(count, idcol = TRUE)
+
+
+ggplot(count, aes_string(x = ".id", y = "V1", fill = ".id")) +
+    geom_boxplot(outlier.shape = NA) +
+    labs(title = "Per sample per sequence quality scores",
+                  subtitle = "Quality score distribution over all sequences for each sample",
+                  y = "Sequence Quality (Phred Score)", x = "") +
+    .theme_Publication() +
+  theme(plot.title = element_text(hjust = 0),
+                 legend.position = "bottom", legend.direction = "horizontal", 
+                 axis.text.x = element_blank()) + 
+  guides(fill = guide_legend(ncol = 4, title = NULL))
+
+```
+
+
+# Per base sequence content {.tabset .tabset-fade}
+     
+The **Per base sequence content** displays the per-base nucleotide frequencies at each position along the reads.  Since the reads are random fragments, it is expected that the contribution of A and T, and C and G should be similar at each position, and the plot should show a parallel straight lines for each of the four nucleotides.  In reality, this is often not the case for the first positions.   Libraries produced by random hexamer priming or those which were fragmented using transposases almost always show a bias in the first positions of the reads.  This bias is not due to a single sequence, but results from enrichement of a number of different K-mers at the 5' end of the reads (this usually has very little effect on downstream analysis).  A bias which is consistent across all bases either indicates that the original library was sequence biased, or that there was a systematic problem during the sequencing of the library.
+
+Problems:
+
+- **warning** if the difference between A and T, or G and C is greater than 10% in any position.  
+- **failure** if the difference between A and T, or G and C is greater than 20% in any position.
+
+Common reasons for problems:
+
+- Overrepresented sequences: adapter dimers or rRNA 
+    
+- Biased selection of random primers for RNA-seq. Nearly all RNA-Seq libraries will fail this module because of this bias, but this is not a problem which can be fixed by processing, and it doesn't seem to adversely affect the ablity to measure expression. 
+   
+- Biased composition libraries: Some libraries are inherently biased in their sequence composition. For example, library treated with sodium bisulphite, which will then converted most of the cytosines to thymines, meaning that the base composition will be almost devoid of cytosines and will thus trigger an error, despite this being entirely normal for that type of library.
+   
+- Library which has been aggressiveley adapter trimmed. 
+
+```{r per_base_sequence_content, results = "asis", out.width = "100%"}
+
+for (i in 1:length(qc)) {
+  cat("\n##", gsub("_fastqc.zip", "", basename(qc.files[i])), "\n")
+  
+  p <- .plot_sc(qc[[i]])
+  print(p)
+  
+  cat("\n")
+}
+
+```
+    
+# Per sequence GC content
+     
+The **Per sequence GC content** plot displays the GC content across the whole length of each sequence in the library. For a normal random library a roughly normal distribution of GC content is expected.  The peak should correspond to the overall GC content of the underlying genome. An unusually shaped distribution may indicate a contaminated library or the presence of a biased subset of sequences (e.g. promoters, CpG islands). 
+    
+```{r per-sequence-GC-content, results = "asis"}
+
+d <- lapply(qc, function(x) x$per_sequence_gc_content)
+d <- data.table::rbindlist(d, idcol = TRUE)
+ggplot(d, aes_string(x = d$`GC Content`, y = "Count", 
+                                       colour = ".id")) +
+  geom_line() +
+  labs(title = "Per sequence GC content", x = "Mean GC Content (%)") +
+  .theme_Publication() +
+  theme(plot.title = element_text(hjust = 0)) +
+  theme(plot.title = element_text(hjust = 0),
+                 legend.position = "right", legend.direction = "vertical", 
+                 axis.text.x = element_blank()) + 
+  guides(colour = guide_legend(ncol = 1, title = NULL))
+```
+
+# Sequence duplication levels {.tabset .tabset-fade}
+
+In a diverse library most sequences will occur only once in the final set. A low level of duplication may indicate a very high level of coverage of the target sequence, but a high level of duplication is more likely to indicate some kind of enrichment bias (e.g., PCR over-amplification).  The **Sequence duplication levels** module counts the degree of duplication of every sequence in the library this is used to creat a plot showing the relative number of sequences with different degrees of duplication.
+
+Problems:
+     
+- **warning** if non-unique sequences make up more than 20% of the total. 
+- **failure** if non-unique sequences make up more than 50% of the total. 
+
+Common reasons for problems:
+
+- Technical duplicates arising from PCR artefacts
+   
+- Biological duplicates from highly expressed genes.  In RNA-seq data, duplication levels can reach upto 40%. Generally, these duplicates should not be removed as it is difficult to determine whether they represent PCR duplicates or high expression of certain genes.
+
+- If you wish to see which over-represented sequences were identified by this module, then you can run the read_fastqc() or read_multifastqc() functions on the libraries you are interested in.
+
+
+```{r sequence-duplication, results = "asis", out.width = "100%"}
+
+for (i in 1:length(qc)) {
+  cat("\n##", gsub("_fastqc.zip", "", basename(qc.files[i])), "\n")
+  
+  p <- .plot_dl(qc[[i]])
+  print(p)
+  
+  cat("\n")
+}
+```     
+
+# Useful Links
+
+- FastQC report for a [good Illumina dataset](http://www.bioinformatics.babraham.ac.uk/projects/fastqc/good_sequence_short_fastqc.html)
+- FastQC report for a [bad Illumina dataset](http://www.bioinformatics.babraham.ac.uk/projects/fastqc/bad_sequence_fastqc.html)
+- [Online documentation for each FastQC report](http://www.bioinformatics.babraham.ac.uk/projects/fastqc/Help/3%20Analysis%20Modules/)
+
+# Bibliography
+
+* Andrews S. (2010). FastQC: a quality control tool for high throughput sequence data. Available online at: http://www.bioinformatics.babraham.ac.uk/projects/fastqc     
+
+# R session info and parameters
+
+```{r settings_used, results = "asis"}
+si <- as.character(toLatex(sessionInfo()))
+si <- si[-c(1, length(si))]
+si <- gsub("(\\\\verb)|(\\|)", "", si)
+si <- gsub("~", " ", si)
+si <- paste(si, collapse = " ")
+si <- unlist(strsplit(si, "\\\\item"))
+cat(paste(si, collapse = "\n -"), "\n")
+```
+

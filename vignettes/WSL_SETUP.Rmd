@@ -1,0 +1,215 @@
+---
+title: "Setting up WSL/Bash on Windows 10"
+author: 
+- name: "Anil Chalisey"
+  affiliation: &id "University of Oxford"
+- name: "Chris O'Callaghan"
+  affiliation: *id
+output: 
+  BiocStyle::html_document2
+vignette: >
+  %\VignetteIndexEntry{Setting up WSL/Bash on Windows 10}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+
+With the introduction of the windows subsystem for linux (WSL) in Windows 10, the Windows OS is now a viable option for bioinformatic analysis, with no need for virtual managers, Docker or Cygwin.  It's early days, but I have found it possible to switch entirely from a Linux computer to a Windows 10 computer for my bioinformatics analyses.
+
+This guide explains how to set up a Windows 10 computer for this purpose.  My general workflow is to work within the windows 10 environment, but when I require Linux-based command-line tools, to either call them directly from the WSL terminal, or from within the the windows command prompt terminal using the following syntax: "bash -c '\<command here\>'".  As most of my packages are designed within R, this guide describes the set-up of WSL in a way that allows system commands to be called from within R.
+
+#  Installing the Linux subsystem for Windows
+
+* Go to 'Settings > Update & Security > For developers' and turn on 'Developer mode' 
+* Go to 'Control panel' > 'Programs and features' > 'Turn Windows features on and off' and then tick the 'Windows subsystem for Linux' box and then allow the machine to restart.
+* Once restarted open a command prompt and type 'bash' - the linux subsystem will download and then guide you through setting up a username and password.
+
+On the latest version of Windows 10, the linux subsystem installed will be Ubuntu 16.10.
+
+Once installed, the bash terminal may be started by opening up a command prompt (press `Win + R` on the keyboard and then type `cmd` and press `Enter` or click OK) and typing `bash` at the command prompt followed by pressing `Enter`.  Once the terminal is open, the system should be updated using the following commands (remembering to provide your password when asked and to type `y` when it asks if you wish to continue):
+
+```{r, engine = "bash", eval = F}
+sudo apt-get update
+sudo apt-get upgrade
+```
+
+The following steps should all be performed within the bash terminal.  This means that unless specified otherwise, **all the steps here will also work for a native Linux/Unix-based operating system.**  As a side note, my usual preference is to avoid amending the executable path, and instead I tend to make symbolic links to binaries within a directory already in the path.  My preferred directory for this purpose is `/usr/local/bin`, but if you do not have root access in your Linux system, then you should make a directory within the home directory called `bin` and make the links within that directory.  To make this directory, use the following commands:
+
+```{r, engine = "bash", eval = F}
+cd ~
+mkdir bin
+```
+
+#  Build environment
+
+Ensure there is a working build environment using the following command:
+
+```bash
+sudo apt-get install gcc make build-essential gfortran
+```
+
+#  Installing Anaconda
+
+Anaconda is a Python (and R) distribution specifically developed for data science and may be installed using the instructions below.   While we could also simply use the default Python distribution from the Ubuntu repositories, Anaconda comes with Intel's MKL and thus provides a substantial performance boost (not to mention its conda package manager).  It may be installed as follows:
+
+```{r, engine = "bash", eval = F}
+wget https://repo.continuum.io/archive/Anaconda2-4.2.0-Linux-x86_64.sh
+bash Anaconda2-4.2.0-Linux-x86_64.sh
+```
+
+During installation, accept the license agreement and allow the install location to be prepended to your .bashrc.  Once installed, update conda and anaconda.
+
+```{r, engine = "bash", eval = F}
+conda update conda
+conda update anaconda
+```
+
+Finally, add the bioconda channel and install software.  This is much easier than installing the tools separately as it also installs all the dependencies (for example, the latest version of JAVA).  The tools I install here are those necessary for my bioinformatics pathways and the packages I have developed:
+
+```{r, engine = "bash", eval = F}
+conda config --add channels bioconda
+conda install samtools bedtools fastqc sambamba MACS2
+# these need to be added to the executable path.  Anaconda asks you whether
+# this should be done during its installation.  However, the path created
+# by anaconda is only accessible from within R by specifying the entire
+# path.  To make it easier to access the programs from R I create symbolic
+# links as described later below.
+```
+
+#  Installing HISAT2
+
+There are binaries available for linux distributions.
+
+```{r, engine = "bash", eval = F}
+wget ftp://ftp.ccb.jhu.edu/pub/infphilo/hisat2/downloads/hisat2-2.0.5-Linux_x86_64.zip
+unzip hisat2-2.0.5-Linux_x86_64.zip
+# this only works if you have root access
+sudo mv hisat2-2.0.5/* /usr/local/bin 
+# if you do not have root access, then do the following
+mv hisat2-2.0.5/* ~/bin 
+rm -rf hisat2-2.0.5
+```
+
+#  Installing R and RStudio
+
+If using the WSL-based approach, there is no absolute requirement to install R or RStudio within WSL, as the workflow is to use R within Windows 10 and then to call Linux programs as needed.  Installation in Windows 10 is straightforward - simply download the executables, double click and follow the instructions.  I recommend using the Microsoft R Open (MRO) version of R which is super-charged with the Intel Maths Kernel for multi-threading.  
+
+For those using Linux, then instructions are below.  R and RStudio can usually only be installed if the user has root priviliges.  If you do not have root priviliges then speak to your administrator.
+
+The R-base available via apt-get is usually out-of-date and is best installed directly from CRAN or MRAN.  
+
+To install R directly from CRAN, first add the repository to the sources list, then add R to the Ubuntu keyring, and then install R-base:
+
+```{r, engine = "bash", eval = F}
+sudo echo "deb http://cran.rstudio.com/bin/linux/ubuntu xenial/" | sudo tee -a /etc/apt/sources.list
+gpg --keyserver keyserver.ubuntu.com --recv-key E084DAB9
+gpg -a --export E084DAB9 | sudo apt-key add -
+sudo apt-get update
+sudo apt-get install r-base r-base-dev
+```
+
+To install the MRO (Microsoft R open, multithreaded) version of R use the following commands, replacing x.x.x with whichever version is the latest:
+
+```{r, engine = "bash", eval = F}
+sudo wget https://mran.microsoft.com/install/mro/x.x.x/microsoft-r-open-x.x.x.tar.gz
+tar -xvzf microsoft-r-open-x.x.x.tar.gz
+cd microsoft-r-open 
+sudo ./install.sh
+cd ..
+rm microsoft-r-open*
+```
+
+To install RStudio:
+
+```{r, engine = "bash", eval = F}
+sudo apt-get update
+sudo apt-get install gdebi-core gfortran libgdal-dev libgeos-dev libpng-dev
+sudo apt-get install libjpeg62-dev libjpeg8-dev libcairo-dev libssl-dev
+wget https://download1.rstudio.org/rstudio-1.0.143-amd64.deb
+sudo gdebi -n rstudio-1.0.143-amd64.deb
+rm rstudio-1.0.143-amd64.deb
+```
+
+# Installing key R packages
+
+This first step is only required if on Linux and describes installation of some key linux packages on which subsequent R packages are dependent.
+
+```{r, engine = "bash", eval = F}
+sudo apt-get update
+sudo apt-get install build-essential libx11-dev
+sudo apt-get install libcurl4-openssl-dev libxml2 libxml2-dev libncurses5-dev zlib1g-dev curl
+```
+
+In Windows 10 the Rtools package must be installed, which can be downloaded from [here](https://cran.r-project.org/bin/windows/Rtools/).
+
+To perform the subsequent steps in Linux open up an R terminal by typing `R` at the command line.  In Windows 10 open up R or Microsoft R Open from the start menu.  Then type the following commands.  After these processes have finished running, the R terminal may be closed and we return to the bash terminal.
+
+```{r, eval = FALSE}
+install.packages(c("tidyverse", "devtools", "rmarkdown", "knitr", "data.table",
+                 "ggthemes"), dependencies = TRUE)
+source("http://bioconductor.org/biocLite.R")
+biocLite("BiocUpgrade")
+biocLite(c("limma", "DESeq2", "edgeR", "ComplexHeatmap", "goseq", "Rsamtools"), 
+         dependencies = TRUE)
+# once complete, close the R terminal
+q()
+```
+
+# Installing HOMER
+
+Homer is a PERL-based software for motif discovery and next-generation sequencing analysis, which may be found at http://homer.ucsd.edu/homer/index.html.  HOMER has a number of dependencies, all of which we have installed, so we can proceed directly to installation.
+
+```{r, engine = "bash", eval = F}
+mkdir ~/homer
+cd ~/homer
+wget http://homer.ucsd.edu/homer/configureHomer.pl
+perl configureHomer.pl -install
+perl configureHomer.pl -install hg19
+perl configureHomer.pl -install human-p
+```
+
+Some of the HOMER functions depend on R being available to Linux, so if you do 
+not have R or did not install R as described above, then the key items may be
+installed using anaconda, particularly if you do not have root access:
+
+```{r, engine = "bash", eval = F}
+conda install r-essentials bioconductor-deseq2 bioconductor-edger
+```
+
+# Setting paths
+
+To ensure all the installed programs can be directly from the command line we create symbolic links in `/usr/local/bin` or `~/bin`
+
+```{r, engine = "bash", eval = F}
+cd /usr/local/bin
+sudo ln -s ~/anaconda2/bin/* .
+sudo ln -s ~/homer/.//bin/* .
+# alternatively, if you do not have root access
+cd ~/bin
+ln -s ~/anaconda2/bin/* .
+ln -s ~/homer/.//bin/* .
+```
+
+#  Using X-windows
+
+WSL does not natively support Graphical User Interfaces (GUIs) such as RStudio, but there is a work-around so that these programs can be used.  The simplest way I have found is to install Mobaxterm which has native X-forwarding and does not require any additional configuration.  Other terminal emulators with X-forwarding also exist (e.g. ConEmu). If using such terminal, running RStudio is as simple as:
+
+If you wish to stick with using the standard WSL terminal, then first you need to download and install an X server such as Xming or VcXsrv on windows.  Once launched, this will then run in the background, and provide a fully functioning X-Windows system.  You just need to tell programs that launch from the bash shell where to send their display by setting the DISPLAY variable:
+
+```{r, engine = "bash", eval = F}
+nano ~/.bashrc
+```
+
+The above command will open `.bashrc` in nano and you can scroll to the end of the file and write
+
+```{r, engine = "bash", eval = F}
+export DISPLAY=:0.0
+```
+
+Save the modified file by pressing `CTRL+X` and answering Y when asked if you want to save the file. Close and restart the console window or source the modified file using the command:
+
+```{r, engine = "bash", eval = F}
+source ~/.bashrc
+```
+
+Now, open the display server by launching **XLaunch** from the windows start menu.  Choose "One large window" or "One large window without titlebar" and set the "display number" to 0. Leave other settings as default and finish the configuration.  Once setup, running a GUI-based program is as simple as starting XLaunch alongside WSL and then executing the program.
