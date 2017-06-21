@@ -108,8 +108,7 @@
 
 # .theme_Publication: theme for ggplot2 figures
 .theme_Publication <- function() {
-  (ggthemes::theme_foundation(base_size   = 14,
-                              base_family = "Helvetica") +
+  (ggthemes::theme_foundation(base_size   = 14) +
       ggplot2::theme(
         plot.title  = ggplot2::element_text(face   = "bold",
                                             size   = ggplot2::rel(1.2),
