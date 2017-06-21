@@ -38,6 +38,8 @@ create_fqreport <- function(fqc = NULL,
     }
   }
 
+  .create_dir(outdir)
+
   if (length(qc.files) == 1) {
     template <- system.file("extdata", "single_sample.Rmd", package = "parseR")
     qc.files <- normalizePath(qc.files)
