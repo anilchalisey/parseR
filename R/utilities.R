@@ -108,9 +108,6 @@
 
 # .theme_Publication: theme for ggplot2 figures
 .theme_Publication <- function() {
-  if (Sys.info()['sysname'] == "Windows") {
-    windowsFonts(Helvetica = windowsFont("TT Helvetica"))
-  }
   (ggthemes::theme_foundation(base_size   = 14,
                               base_family = "Helvetica") +
       ggplot2::theme(

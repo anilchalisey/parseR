@@ -27,8 +27,7 @@
 #' @import ggplot2
 #' @import ggthemes
 #' @import grid
-#' @importFrom grDevices windowsFont windowsFonts
-#'
+#' 
 #' @export
 
 plot_fqc <- function(fqcRes, modules = "all") {

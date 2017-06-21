@@ -64,7 +64,6 @@
 #'
 #' @import ggplot2
 #' @importFrom reshape2 melt
-#' @importFrom grDevices windowsFont windowsFonts
 #'
 #' @export
 #'
