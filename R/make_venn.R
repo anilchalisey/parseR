@@ -27,7 +27,7 @@ make_venn <- function(results = results, p.value = 0.05) {
   })
 
   venns <- list()
-  if (length(cDE) == 2) {
+  if (length(cDE[[1]]) == 2) {
     for (i in seq_along(cDE)) {
       ppi <- 600
       png(filename = paste0(names(cDE)[i], "_venn.png"),
@@ -37,7 +37,7 @@ make_venn <- function(results = results, p.value = 0.05) {
       graphics.off()
     }
   }
-  if (length(cDE) == 3) {
+  if (length(cDE[[1]]) == 3) {
     for (i in seq_along(cDE)) {
       ppi <- 600
       png(filename = paste0(names(cDE)[i], "_venn.png"),

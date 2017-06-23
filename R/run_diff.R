@@ -168,8 +168,8 @@ run_diff <- function(
   ############
   unlink("hg19_genes.saf")
   tomove <- c("ProcessCounts.png", "filtered_counts.txt")
-  if (isTRUE(count)) tomove <- c(tomove, "counts.txt", "counts.txt.summary",
-                                 "counts.txt.full", "counts.txt.full.summary")
+  if (isTRUE(count)) tomove <- c(tomove, "counts.txt", "counts.txt.full",
+                                 "counts.txt.full.summary")
   lapply(tomove, function(x) {
     file.rename(x, file.path("DE_results/Common_results/", x))
   })
